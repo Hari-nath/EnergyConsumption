@@ -1,4 +1,4 @@
-from flask import Flask, send_from_directory, request, jsonify
+from flask import Flask, send_file, request, jsonify
 from flask_cors import CORS
 import numpy as np
 from tensorflow.keras.models import load_model
@@ -6,13 +6,8 @@ from sklearn.preprocessing import MinMaxScaler
 import os
 from datetime import datetime
 
-app = Flask(__name__, static_folder='static', static_url_path='')
+app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
-
-# Ensure static folder exists
-if not os.path.exists('static'):
-    os.makedirs('static')
-    print("Created static folder")
 
 # Load the trained model
 model = None
@@ -42,13 +37,11 @@ scaler.fit(sample_data)
 
 def mock_predict(input_data):
     """Mock prediction when model is not available"""
-    # Simple rule-based prediction based on lights usage and temperature
     lights = input_data[0]
     indoor_temp = input_data[1]
     outdoor_temp = input_data[19]
     hour = input_data[25]
     
-    # Calculate energy consumption score
     base_score = lights / 50.0
     temp_diff = abs(indoor_temp - outdoor_temp)
     time_factor = 1.5 if 18 <= hour <= 22 else 1.0
@@ -66,29 +59,26 @@ def mock_predict(input_data):
 
 def get_prediction_details(raw_pred, class_index, input_data):
     """Generate detailed prediction information for frontend"""
-    class_index = int(class_index)  # Ensure Python int
+    class_index = int(class_index)
     class_labels = ['Low (<100 Wh)', 'Medium (100-200 Wh)', 'High (>200 Wh)']
-    colors = ['#10b981', '#f59e0b', '#ef4444']  # Green, Orange, Red
+    colors = ['#10b981', '#f59e0b', '#ef4444']
     
     prediction = class_labels[class_index]
     confidence = float(np.max(raw_pred))
     
-    # Probability breakdown
     probabilities = {
         'Low': float(raw_pred[0]),
         'Medium': float(raw_pred[1]),
         'High': float(raw_pred[2])
     }
     
-    # Chart data
     chart_data = {
         'labels': class_labels,
         'probabilities': [float(p) for p in raw_pred],
         'colors': colors,
-        'predicted_class': class_index  # Now Python int
+        'predicted_class': class_index
     }
     
-    # Energy level info
     energy_level = {
         'label': prediction,
         'color': colors[class_index],
@@ -97,20 +87,18 @@ def get_prediction_details(raw_pred, class_index, input_data):
         'emoji': '🟢' if class_index == 0 else '🟡' if class_index == 1 else '🔴'
     }
     
-    # Recommendations
     recommendations = {
         0: "✅ Excellent energy efficiency! Continue current practices.",
         1: "⚠️ Moderate usage detected. Consider optimizing lighting and HVAC.",
         2: "🔴 High consumption! Immediate optimization recommended for lights and temperature control."
     }
     
-    # Key insights
     insights = {
         'lights_usage': float(input_data[0]),
-        'indoor_temp': float(input_data[1]),  # T1
-        'outdoor_temp': float(input_data[19]),  # T_out
-        'humidity': float(input_data[2]),  # RH_1
-        'hour_of_day': int(float(input_data[25]))  # Ensure int from float
+        'indoor_temp': float(input_data[1]),
+        'outdoor_temp': float(input_data[19]),
+        'humidity': float(input_data[2]),
+        'hour_of_day': int(float(input_data[25]))
     }
     
     return {
@@ -132,25 +120,29 @@ def get_prediction_details(raw_pred, class_index, input_data):
 @app.route('/')
 def index():
     try:
-        return send_from_directory(app.static_folder, 'index.html')
+        if os.path.exists('index.html'):
+            return send_file('index.html')
+        else:
+            print("Error: index.html not found in root directory")
+            return '''
+            <!DOCTYPE html>
+            <html>
+            <head><title>Energy Forecast Setup</title></head>
+            <body>
+                <h1>Energy Forecasting API</h1>
+                <p>Server is running but index.html not found in the root directory.</p>
+                <p>Please place your index.html file in the root directory of the project.</p>
+                <p>API endpoints:</p>
+                <ul>
+                    <li><a href="/health">/health</a> - Check server status</li>
+                    <li>POST /predict - Make predictions</li>
+                </ul>
+            </body>
+            </html>
+            ''', 200
     except Exception as e:
         print(f"Error serving index.html: {e}")
-        return '''
-        <!DOCTYPE html>
-        <html>
-        <head><title>Energy Forecast Setup</title></head>
-        <body>
-            <h1>Energy Forecasting API</h1>
-            <p>Server is running but index.html not found in static folder.</p>
-            <p>Please place your index.html file in the <code>static/</code> folder.</p>
-            <p>API endpoints:</p>
-            <ul>
-                <li><a href="/health">/health</a> - Check server status</li>
-                <li>POST /predict - Make predictions</li>
-            </ul>
-        </body>
-        </html>
-        ''', 200
+        return jsonify({'error': f'Failed to serve index.html: {str(e)}', 'status': 'error'}), 500
 
 @app.route('/predict', methods=['POST', 'OPTIONS'])
 def predict():
@@ -164,7 +156,6 @@ def predict():
         
         print(f"📥 Received prediction request with {len(data)} features")
         
-        # Validate all required features
         input_data = []
         missing_features = []
         for feature in features:
@@ -187,15 +178,12 @@ def predict():
         
         print(f"✅ Valid input data prepared: {len(input_data)} features")
         
-        # Prepare input for model
         input_data = np.array([input_data])
         scaled_input = scaler.transform(input_data)
         
-        # Reshape for LSTM model [samples, timesteps, features]
         seq_length = 6
         scaled_input = np.repeat(scaled_input[:, np.newaxis, :], seq_length, axis=1)
         
-        # Get prediction
         if model:
             raw_pred = model.predict(scaled_input, verbose=0)
         else:
@@ -203,7 +191,6 @@ def predict():
         
         class_index = np.argmax(raw_pred, axis=1)[0]
         
-        # Generate detailed response
         prediction_details = get_prediction_details(raw_pred[0], class_index, input_data[0])
         
         print(f"✅ Prediction completed: {prediction_details['prediction']} ({prediction_details['confidence_display']})")
@@ -240,7 +227,7 @@ if __name__ == '__main__':
     print("🚀 Starting Energy Consumption Forecasting API")
     print(f"📊 Model status: {'✅ LOADED' if model else '⚠️ MOCK MODE'}")
     print("🌐 Server available at: http://localhost:5000")
-    print("📁 Place index.html in 'static' folder")
+    print("📁 Place index.html in the root directory")
     print("📁 Place energy_forecast_model.h5 in root directory (optional)")
     print("-" * 60)
     app.run(debug=True, host='0.0.0.0', port=5000)
